@@ -67,7 +67,7 @@ export default function AdminPage() {
             </div>
             <div>
               <h1 className="font-bold text-gray-800">Panel Administrativo</h1>
-              <p className="text-xs text-gray-500">Colegio Mariano</p>
+              <p className="text-xs text-gray-500">Colegio Mariano de Schoenstatt</p>
             </div>
           </div>
           <div className="flex items-center gap-4">

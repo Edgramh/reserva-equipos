@@ -6,6 +6,8 @@ import ReservaPage from './pages/ReservaPage';
 import AdminPage from './pages/AdminPage';
 import TabletPage from './pages/TabletPage';
 import LoginPage from './pages/LoginPage';
+import CancelarReserva from './pages/CancelarReserva';
+import MisReservas from './pages/MisReservas';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -39,6 +41,12 @@ export default function App() {
         
         {/* Redirigir rutas desconocidas a inicio */}
         <Route path="*" element={<Navigate to="/" />} />
+
+        {/* Página de Cancelación de Reservas */}
+        <Route path="/cancelar-reserva/:id" element={<CancelarReserva />} />
+
+        <Route path="/mis-reservas" element={<MisReservas />} />
+      
       </Routes>
     </BrowserRouter>
   );

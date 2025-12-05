@@ -49,5 +49,25 @@ export const reservasService = {
       console.error('Error al obtener reservas:', error);
       return [];
     }
+  },
+
+  // Nueva función para Mis Reservas
+  obtenerReservasPorUsuario: async (email) => {
+    try {
+      const q = query(
+        collection(db, COLLECTION),
+        where('usuarioEmail', '==', email),
+        where('estado', '==', 'confirmada')
+      );
+      
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+    } catch (error) {
+      console.error('Error al obtener reservas del usuario:', error);
+      return [];
+    }
   }
 };

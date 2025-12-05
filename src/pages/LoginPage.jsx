@@ -8,11 +8,15 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl mx-auto mb-4 flex items-center justify-center shadow-lg">
-            <Laptop className="w-10 h-10 text-white" />
+          <div className="mx-auto mb-6 flex justify-center">
+            <img 
+              src="/vite.svg" 
+              alt="Logo Colegio Mariano de Schoenstatt" 
+              className="w-28 h-28 object-contain drop-shadow-lg"
+            />
           </div>
           <h1 className="text-2xl font-bold text-gray-800">Reserva de Equipos</h1>
-          <p className="text-gray-500 mt-2">Colegio Mariano</p>
+          <p className="text-gray-500 mt-2">Colegio Mariano de Schoenstatt</p>
         </div>
         <button
           onClick={login}

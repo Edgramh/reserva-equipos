@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Calendar, Clock, Laptop, Tablet, BookOpen, AlertTriangle, Check, ChevronDown, Shield, X, Circle, LogOut, Loader2 } from 'lucide-react';
+import { Calendar, Clock, List, Laptop, Tablet, BookOpen, AlertTriangle, Check, ChevronDown, Shield, X, Circle, LogOut, Loader2 } from 'lucide-react';
 import { useAuth } from "../hooks/useAuth";
 import { useReservas } from "../hooks/useReservas";
 import { reservasService } from "../services/reservas.service";
 import { isAdmin } from '../utils/adminUsers';
 import { useNavigate } from 'react-router-dom';
-
 
 const CURSOS = {
   basico: ['1ro A', '1ro B', '1ro C', '2do A', '2do B', '2do C', '3ro A', '3ro B', '4to A', '4to B', '5to A', '5to B', '6to A', '6to B'],
@@ -41,6 +40,25 @@ const getGrupoHorario = (curso) => {
 
 const getCiclo = (curso) => CURSOS.basico.includes(curso) ? 'Ciclo Básico' : 'Ciclo Mayor';
 const usaTablets = (curso) => CURSOS_TABLETS.includes(curso);
+
+// NUEVA FUNCIÓN: decide qué bloque guardar en la base de datos
+const obtenerBloqueReal = (bloqueOriginal, curso, fechaStr) => {
+  const fecha = new Date(fechaStr);
+  const diaSemana = fecha.getDay(); // 0=domingo, 1=lunes, 2=martes...
+  const esMartes = diaSemana === 2;
+  const esCursoMedio = CURSOS.mayor.includes(curso);
+
+  if (esMartes) {
+    return bloqueOriginal; // martes → bloques normales
+  }
+
+  if (esCursoMedio) {
+    if (bloqueOriginal === 6) return 60; // 13:10–13:55 solo medios
+    if (bloqueOriginal === 7) return 70; // 13:55–14:40 solo medios
+  }
+
+  return bloqueOriginal; // 4to-6to y 1ro-3ro usan bloques normales
+};
 
 const timeToMinutes = (t) => {
   const [h, m] = t.split(':').map(Number);
@@ -78,7 +96,7 @@ const isDayPassed = (dateStr, currentTime) => {
 };
 
 export default function ReservaPage() {
-    const { user, loading, logout } = useAuth();
+  const { user, loading: authLoading, logout } = useAuth();
   const navigate = useNavigate();
 
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -134,33 +152,83 @@ export default function ReservaPage() {
 
   const getDayOfWeekForDate = (dateStr) => new Date(dateStr + 'T12:00:00').getDay();
 
-  const getHorarios = () => {
-    if (!formData.curso || !formData.fecha) return [];
-    const dow = getDayOfWeekForDate(formData.fecha);
-    if (dow === 2) return HORARIOS['martes'];
-    return HORARIOS[getGrupoHorario(formData.curso)];
-  };
+const getHorarios = () => {
+  if (!formData.curso || !formData.fecha) return [];
 
-  const isBloquePassedTime = (bloque) => {
-    if (!isToday) return false;
-    const now = currentTime.getHours() * 60 + currentTime.getMinutes();
-    return now > timeToMinutes(bloque.inicio);
-  };
+  const dow = getDayOfWeekForDate(formData.fecha);
+  const esMartes = dow === 2; // martes
+  const esBasico46 = ['4to A', '4to B', '5to A', '5to B', '6to A', '6to B'].includes(formData.curso);
+  const esMedio = ['7mo A', '7mo B', '8vo A', '8vo B', 'I Medio A', 'I Medio B', 'II Medio A', 'II Medio B', 'III Medio A', 'IV Medio A'].includes(formData.curso);
 
-  const getCarrosDisponibles = (bloqueIdx) => {
-    const esTab = usaTablets(formData.curso);
-    const total = esTab ? 3 : 10;
-    const tipo = esTab ? 'tablet' : 'chromebook';
-    
-    const reservados = reservasExistentes
-      .filter(r => {
-        // Usar siempre fechaStr (que es string)
-        return r.fechaStr === formData.fecha && r.tipoEquipo === tipo;
+  // MARTES → horario especial de solo 7 bloques
+  if (esMartes) {
+    return [
+      { bloque: 0, inicio: '8:10', fin: '8:55' },
+      { bloque: 1, inicio: '8:55', fin: '9:40' },
+      { bloque: 2, inicio: '9:55', fin: '10:40' },
+      { bloque: 3, inicio: '10:40', fin: '11:25' },
+      { bloque: 4, inicio: '11:40', fin: '12:25' },
+      { bloque: 5, inicio: '12:25', fin: '13:10' },
+      { bloque: 6, inicio: '13:10', fin: '13:50' }
+    ];
+  }
+
+  // Días normales → 10 bloques con bloqueos por curso
+  return [
+    { bloque: 0, inicio: '8:10', fin: '8:55' },
+    { bloque: 1, inicio: '8:55', fin: '9:40' },
+    { bloque: 2, inicio: '9:55', fin: '10:40' },
+    { bloque: 3, inicio: '10:40', fin: '11:25' },
+    { bloque: 4, inicio: '11:45', fin: '12:30' },
+    { bloque: 5, inicio: '12:30', fin: '13:10' },
+    { bloque: 6, inicio: '13:10', fin: '13:55', disabled: esBasico46 },
+    { bloque: 7, inicio: '13:55', fin: '14:40', disabled: esMedio },
+    { bloque: 8, inicio: '14:40', fin: '15:20' },
+    { bloque: 9, inicio: '15:20', fin: '16:00' }
+  ];
+};
+
+const isBloquePassedTime = (bloque) => {
+  if (!isToday) return false;
+  const now = currentTime.getHours() * 60 + currentTime.getMinutes();
+  const finBloque = timeToMinutes(bloque.fin);
+  return now > finBloque;
+};
+
+// REEMPLAZA COMPLETAMENTE esta función:
+const getCarrosDisponibles = (bloqueIdx) => {
+  const esTab = usaTablets(formData.curso);
+  const total = esTab ? 3 : 10;
+  const tipo = esTab ? 'tablet' : 'chromebook';
+  
+  const diaSemana = new Date(formData.fecha).getDay(); // ¡NUEVO!
+  const esMartes = diaSemana === 2; // martes
+
+  const reservados = reservasExistentes
+    .filter(r => r.fechaStr === formData.fecha && r.tipoEquipo === tipo)
+    .flatMap(r => r.slots
+      .filter(s => {
+        const bloqueGuardado = s.bloque;
+
+        // Si es martes → todos usan bloques normales (6 y 7)
+        if (esMartes) {
+          return bloqueGuardado === bloqueIdx;
+        }
+
+        // Si NO es martes:
+        // - Para bloque 6: solo se ocupa si alguien reservó 60 (medios)
+        if (bloqueIdx === 6) return bloqueGuardado === 60;
+        // - Para bloque 7: se ocupa si alguien reservó 70 (medios) o 7 (básicos)
+        if (bloqueIdx === 7) return bloqueGuardado === 70 || bloqueGuardado === 7;
+
+        // Resto de bloques: comparación normal
+        return bloqueGuardado === bloqueIdx;
       })
-      .flatMap(r => r.slots.filter(s => s.bloque === bloqueIdx).map(s => s.carro));
-    
-    return Array.from({ length: total }, (_, i) => i + 1).filter(c => !reservados.includes(c));
-  };
+      .map(s => s.carro)
+    );
+  
+  return Array.from({ length: total }, (_, i) => i + 1).filter(c => !reservados.includes(c));
+};
 
   const isSlotSelected = (b, c) => formData.selectedSlots.some(s => s.bloque === b && s.carro === c);
 
@@ -174,12 +242,12 @@ export default function ReservaPage() {
     } else {
       const bloques = [...new Set(formData.selectedSlots.map(s => s.bloque))];
       if (!bloques.includes(bloqueIdx) && bloques.length >= 2) {
-        setErrors({ ...errors, slots: 'Máximo 2 bloques simultáneos' });
+        setErrors({ ...errors, slots: 'Máximo 2 horas simultáneas' });
         return;
       }
       const max = usaTablets(formData.curso) ? 3 : 4;
       if (formData.selectedSlots.filter(s => s.bloque === bloqueIdx).length >= max) {
-        setErrors({ ...errors, slots: `Máximo ${max} carros por bloque` });
+        setErrors({ ...errors, slots: `Máximo ${max} carros por reserva de hora` });
         return;
       }
       setErrors({ ...errors, slots: null });
@@ -198,8 +266,8 @@ export default function ReservaPage() {
   const handleSubmit = async () => {
     const err = {};
     if (!formData.curso) err.curso = 'Selecciona un curso';
-    if (formData.selectedSlots.length === 0) err.slots = 'Selecciona al menos un bloque';
-    if (!formData.aceptaTerminos) err.terminos = 'Debes aceptar los términos';
+    if (formData.selectedSlots.length === 0) err.slots = 'Selecciona al menos un bloque horario';
+    if (!formData.aceptaTerminos) err.terminos = 'Debes aceptar los términos y condiciones';
     if (formData.ultimaHora && !formData.justificacion.trim()) err.justificacion = 'Ingresa una justificación';
     
     if (Object.keys(err).length > 0) {
@@ -208,15 +276,14 @@ export default function ReservaPage() {
     }
 
     try {
-      // Preparar datos de la reserva
       const reservaData = {
         curso: formData.curso,
         ciclo: getCiclo(formData.curso),
         tipoEquipo: usaTablets(formData.curso) ? 'tablet' : 'chromebook',
         fecha: new Date(formData.fecha),
         fechaStr: formData.fecha,
-        slots: formData.selectedSlots.map((slot, idx) => ({
-          bloque: slot.bloque,
+        slots: formData.selectedSlots.map(slot => ({
+          bloque: obtenerBloqueReal(slot.bloque, formData.curso, formData.fecha),
           carro: slot.carro,
           horaInicio: getHorarios()[slot.bloque].inicio,
           horaFin: getHorarios()[slot.bloque].fin
@@ -226,13 +293,10 @@ export default function ReservaPage() {
         aceptaTerminos: formData.aceptaTerminos
       };
 
-      // Guardar en Firebase
       await reservasService.crearReserva(reservaData, user);
 
-      // Mostrar éxito
       setShowSuccess(true);
 
-      // Limpiar formulario después de 3 segundos
       setTimeout(() => {
         setShowSuccess(false);
         setFormData({
@@ -250,7 +314,7 @@ export default function ReservaPage() {
     }
   };
 
-  if (loading) {
+  if (authLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
         <Loader2 className="w-12 h-12 text-indigo-500 animate-spin" />
@@ -267,10 +331,10 @@ export default function ReservaPage() {
               <Laptop className="w-10 h-10 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-gray-800">Reserva de Equipos</h1>
-            <p className="text-gray-500 mt-2">Colegio Mariano</p>
+            <p className="text-gray-500 mt-2">Colegio Mariano de Schoenstatt</p>
           </div>
           <button
-            onClick={login}
+            onClick={() => {/* tu login con Google */}}
             className="w-full bg-white border-2 border-gray-200 rounded-xl py-3 px-4 flex items-center justify-center gap-3 hover:bg-gray-50 transition-all shadow-sm"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -297,29 +361,15 @@ export default function ReservaPage() {
           <h2 className="text-2xl font-bold text-gray-800 mb-2">¡Reserva Confirmada!</h2>
           <p className="text-gray-500 mb-6">Recibirás un correo de confirmación y un recordatorio 15 min antes.</p>
           <div className="bg-gray-50 rounded-2xl p-4 mb-6 text-left text-sm text-gray-600">
-            <p className="mb-1">
-              <span className="font-medium">Curso:</span> {formData.curso}
-            </p>
-            <p className="mb-1">
-              <span className="font-medium">Fecha:</span> {formatDate(formData.fecha)}
-            </p>
-            <p className="mb-1">
-              <span className="font-medium">Ciclo:</span> {getCiclo(formData.curso)}
-            </p>
-            <p>
-              <span className="font-medium">Equipos:</span> {usaTablets(formData.curso) ? 'Tablets' : 'Chromebooks'}
-            </p>
+            <p className="mb-1"><span className="font-medium">Curso:</span> {formData.curso}</p>
+            <p className="mb-1"><span className="font-medium">Fecha:</span> {formatDate(formData.fecha)}</p>
+            <p className="mb-1"><span className="font-medium">Ciclo:</span> {getCiclo(formData.curso)}</p>
+            <p><span className="font-medium">Equipos:</span> {usaTablets(formData.curso) ? 'Tablets' : 'Chromebooks'}</p>
           </div>
           <button
             onClick={() => {
               setShowSuccess(false);
-              setFormData({
-                ...formData,
-                selectedSlots: [],
-                ultimaHora: false,
-                justificacion: '',
-                aceptaTerminos: false
-              });
+              setFormData({ ...formData, selectedSlots: [], ultimaHora: false, justificacion: '', aceptaTerminos: false });
             }}
             className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl py-3 font-medium hover:from-blue-600 hover:to-indigo-700 transition-all shadow-lg"
           >
@@ -345,34 +395,43 @@ export default function ReservaPage() {
             </div>
             <div>
               <h1 className="font-bold text-gray-800">Reserva de Equipos</h1>
-              <p className="text-xs text-gray-500">Colegio Mariano</p>
+              <p className="text-xs text-gray-500">Colegio Mariano de Schoenstatt</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
-            {isAdmin(user.email) ? (
-              <button 
-                onClick={() => {
-                  console.log('Navegando a admin...');
-                  navigate('/admin');
-                }} 
-                className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-indigo-600 cursor-pointer" 
-                title="Panel Admin"
-              >
-                <Shield className="w-5 h-5" />
-              </button>
-            ) : (
-              <div className="text-xs text-gray-400 p-2">No admin</div>
-            )}
+            <div className="flex items-center gap-3">
+              {isAdmin(user.email) && (
+                <button onClick={() => navigate('/admin')} className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-indigo-600 transition-all" title="Panel Administrador">
+                  <Shield className="w-5 h-5" />
+                </button>
+              )}
+              {/* Botón Calendario - Solo visible para ADMINS */}
+              {isAdmin(user.email) && (
+                <button
+                  onClick={() => navigate('/tablet')}
+                  className="p-2.5 bg-gradient-to-br from-indigo-500 to-purple-600 text-white rounded-lg shadow-md hover:shadow-lg hover:scale-105 transition-all flex items-center gap-1.5"
+                  title="Ver el calendario de reservas"
+                >
+                  <Calendar className="w-5 h-5" />
+                  <span className="text-xs font-medium hidden sm:inline">Calendario</span>
+                </button>
+              )}
+                  <button
+                  onClick={() => navigate('/mis-reservas')}
+                  className="p-2.5 bg-gradient-to-br from-emerald-500 to-teal-600 text-white rounded-lg shadow-md hover:shadow-lg hover:scale-105 transition-all flex items-center gap-1.5"
+                  title="Ver mis reservas activas"
+                >
+                  <List className="w-5 h-5" />
+                  <span className="text-xs font-medium hidden sm:inline">Mis Reservas</span>
+                </button>
+            </div>
             <div className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
               <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-pink-500 rounded-full flex items-center justify-center text-white text-sm font-medium">
                 {user?.name?.charAt(0)}
               </div>
               <span className="text-sm text-gray-700 hidden sm:block">{user?.name}</span>
             </div>
-            <button
-              onClick={handleLogout}
-              className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500"
-            >
+            <button onClick={handleLogout} className="p-2 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500">
               <LogOut className="w-5 h-5" />
             </button>
           </div>
@@ -393,25 +452,15 @@ export default function ReservaPage() {
                   <div className="relative">
                     <select
                       value={formData.curso}
-                      onChange={(e) =>
-                        setFormData({ ...formData, curso: e.target.value, selectedSlots: [] })
-                      }
+                      onChange={(e) => setFormData({ ...formData, curso: e.target.value, selectedSlots: [] })}
                       className="w-full appearance-none bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 pr-10 text-sm focus:outline-none focus:border-indigo-400 focus:bg-white"
                     >
                       <option value="">Selecciona un curso</option>
                       <optgroup label="Ciclo Básico">
-                        {CURSOS.basico.map(c => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
+                        {CURSOS.basico.map(c => (<option key={c} value={c}>{c}</option>))}
                       </optgroup>
                       <optgroup label="Ciclo Mayor">
-                        {CURSOS.mayor.map(c => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
+                        {CURSOS.mayor.map(c => (<option key={c} value={c}>{c}</option>))}
                       </optgroup>
                     </select>
                     <ChevronDown className="w-4 h-4 text-gray-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -442,19 +491,14 @@ export default function ReservaPage() {
                     {availableDates.map(ds => (
                       <button
                         key={ds}
-                        onClick={() =>
-                          setFormData({ ...formData, fecha: ds, selectedSlots: [] })
-                        }
+                        onClick={() => setFormData({ ...formData, fecha: ds, selectedSlots: [] })}
                         className={`p-2 rounded-xl text-xs font-medium transition-all ${
                           formData.fecha === ds
                             ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-md'
                             : 'bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-100'
                         }`}
                       >
-                        {new Date(ds + 'T12:00:00').toLocaleDateString('es-CL', {
-                          weekday: 'short',
-                          day: 'numeric'
-                        })}
+                        {new Date(ds + 'T12:00:00').toLocaleDateString('es-CL', { weekday: 'short', day: 'numeric' })}
                       </button>
                     ))}
                   </div>
@@ -465,9 +509,7 @@ export default function ReservaPage() {
                     <input
                       type="checkbox"
                       checked={formData.ultimaHora}
-                      onChange={(e) =>
-                        setFormData({ ...formData, ultimaHora: e.target.checked })
-                      }
+                      onChange={(e) => setFormData({ ...formData, ultimaHora: e.target.checked })}
                       className="mt-0.5 w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-400"
                     />
                     <div>
@@ -475,30 +517,22 @@ export default function ReservaPage() {
                         <AlertTriangle className="w-4 h-4 text-orange-500" />
                         Reserva de Última Hora
                       </span>
-                      <p className="text-xs text-gray-500 mt-1">
-                        Marca esta opción si tu reserva es fuera del plazo mínimo
-                      </p>
+                      <p className="text-xs text-gray-500 mt-1">Marca esta opción si tu reserva es fuera del plazo mínimo</p>
                     </div>
                   </label>
                 </div>
 
                 {formData.ultimaHora && (
                   <div className="bg-orange-50 rounded-xl p-3 border border-orange-200">
-                    <label className="block text-sm font-medium text-orange-800 mb-1.5">
-                      Justificación *
-                    </label>
+                    <label className="block text-sm font-medium text-orange-800 mb-1.5">Justificación *</label>
                     <textarea
                       value={formData.justificacion}
-                      onChange={(e) =>
-                        setFormData({ ...formData, justificacion: e.target.value })
-                      }
+                      onChange={(e) => setFormData({ ...formData, justificacion: e.target.value })}
                       placeholder="Explica por qué necesitas esta reserva..."
                       className="w-full bg-white border border-orange-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-400 resize-none"
                       rows={3}
                     />
-                    {errors.justificacion && (
-                      <p className="text-red-500 text-xs mt-1">{errors.justificacion}</p>
-                    )}
+                    {errors.justificacion && <p className="text-red-500 text-xs mt-1">{errors.justificacion}</p>}
                   </div>
                 )}
 
@@ -507,19 +541,14 @@ export default function ReservaPage() {
                     <input
                       type="checkbox"
                       checked={formData.aceptaTerminos}
-                      onChange={(e) =>
-                        setFormData({ ...formData, aceptaTerminos: e.target.checked })
-                      }
+                      onChange={(e) => setFormData({ ...formData, aceptaTerminos: e.target.checked })}
                       className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-500 focus:ring-indigo-400"
                     />
                     <span className="text-xs text-gray-600 leading-relaxed">
-                      Acepto retirar personalmente los equipos, contabilizarlos y devolverlos al
-                      terminar.
+                      Acepto retirar personalmente los equipos reservados, contabilizarlos, firmar el registro y devolverlos al terminar su uso.
                     </span>
                   </label>
-                  {errors.terminos && (
-                    <p className="text-red-500 text-xs mt-1">{errors.terminos}</p>
-                  )}
+                  {errors.terminos && <p className="text-red-500 text-xs mt-1">{errors.terminos}</p>}
                 </div>
               </div>
             </div>
@@ -535,8 +564,7 @@ export default function ReservaPage() {
                 </h2>
                 {formData.selectedSlots.length > 0 && (
                   <span className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full text-sm font-medium">
-                    {formData.selectedSlots.length} seleccionado
-                    {formData.selectedSlots.length > 1 ? 's' : ''}
+                    {formData.selectedSlots.length} seleccionado{formData.selectedSlots.length > 1 ? 's' : ''}
                   </span>
                 )}
               </div>
@@ -557,19 +585,10 @@ export default function ReservaPage() {
                             Hora
                           </th>
                           {Array.from({ length: numCarros }, (_, i) => (
-                            <th
-                              key={i}
-                              className="text-center text-xs font-semibold text-gray-500 pb-3 px-0.5"
-                            >
+                            <th key={i} className="text-center text-xs font-semibold text-gray-500 pb-3 px-0.5">
                               <div className="flex flex-col items-center gap-0.5">
-                                {esTablet ? (
-                                  <Tablet className="w-3.5 h-3.5 text-gray-400" />
-                                ) : (
-                                  <Laptop className="w-3.5 h-3.5 text-gray-400" />
-                                )}
-                                <span>
-                                  {esTablet ? `T-0${i + 1}` : `C-${String(i + 1).padStart(2, '0')}`}
-                                </span>
+                                {esTablet ? <Tablet className="w-3.5 h-3.5 text-gray-400" /> : <Laptop className="w-3.5 h-3.5 text-gray-400" />}
+                                <span>{esTablet ? `T-0${i + 1}` : `C-${String(i + 1).padStart(2, '0')}`}</span>
                               </div>
                             </th>
                           ))}
@@ -579,36 +598,38 @@ export default function ReservaPage() {
                         {horarios.map((h, bIdx) => {
                           const disp = getCarrosDisponibles(bIdx);
                           const isPast = isBloquePassedTime(h);
+                          const isDisabled = h.disabled || false;
+
                           return (
-                            <tr
-                              key={bIdx}
-                              className={`border-t border-gray-100 ${isPast ? 'opacity-40' : ''}`}
+                            <tr 
+                              key={bIdx} 
+                              className={`border-t border-gray-100 ${isPast || isDisabled ? 'opacity-40' : ''}`}
                             >
                               <td className="py-1 pr-2">
-                                <div
-                                  className={`rounded-lg px-2 py-1 text-xs text-center ${
-                                    isPast
-                                      ? 'bg-gray-100 text-gray-400'
-                                      : 'bg-gray-50 text-gray-700'
-                                  }`}
-                                >
-                                  <span className="font-semibold">{h.inicio}</span>
+                                <div className={`rounded-lg px-2 py-1 text-xs text-center font-medium ${
+                                  isPast || isDisabled
+                                    ? 'bg-gray-200 text-gray-500 line-through'
+                                    : 'bg-gray-50 text-gray-700'
+                                }`}>
+                                  <span>{h.inicio}</span>
                                   <span className="text-gray-400 mx-0.5">-</span>
-                                  <span className="font-semibold">{h.fin}</span>
+                                  <span>{h.fin}</span>
+                                  {isDisabled}
                                 </div>
                               </td>
                               {Array.from({ length: numCarros }, (_, cIdx) => {
                                 const cNum = cIdx + 1;
-                                const ok = disp.includes(cNum) && !isPast;
+                                const ok = disp.includes(cNum) && !isPast && !isDisabled;
                                 const sel = isSlotSelected(bIdx, cNum);
+
                                 return (
                                   <td key={cIdx} className="py-1 px-0.5">
                                     <button
                                       onClick={() => ok && toggleSlot(bIdx, cNum)}
-                                      disabled={!ok || isPast}
+                                      disabled={!ok}
                                       className={`w-full h-7 rounded-lg transition-all flex items-center justify-center ${
-                                        isPast
-                                          ? 'bg-gray-100 border border-gray-200 cursor-not-allowed'
+                                        isDisabled || isPast
+                                          ? 'bg-gray-100 border border-gray-300 cursor-not-allowed'
                                           : sel
                                           ? 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-md scale-105'
                                           : ok
@@ -616,15 +637,10 @@ export default function ReservaPage() {
                                           : 'bg-red-50 border border-red-200 cursor-not-allowed'
                                       }`}
                                     >
-                                      {isPast ? (
-                                        <X className="w-3 h-3 text-gray-300" />
-                                      ) : sel ? (
-                                        <Check className="w-3.5 h-3.5" />
-                                      ) : ok ? (
-                                        <Circle className="w-3 h-3 text-green-500" />
-                                      ) : (
-                                        <X className="w-3 h-3 text-red-300" />
-                                      )}
+                                      {isDisabled || isPast ? <X className="w-3 h-3 text-gray-400" /> :
+                                      sel ? <Check className="w-3.5 h-3.5" /> :
+                                      ok ? <Circle className="w-3 h-3 text-green-500" /> :
+                                      <X className="w-3 h-3 text-red-300" />}
                                     </button>
                                   </td>
                                 );
